@@ -4,7 +4,7 @@ retrieve saml token using external browser and write it to standar out
 use xdg-open to open a browser
 
 ## usage
-if jbang is intalled set executable permission permission to `XdgOpenSaml.java` 
+if [jbang](https://www.jbang.dev/) is intalled set executable permission permission to `XdgOpenSaml.java` 
 ```
    XdgOpenSaml.java <vpn-url> 
 ```
