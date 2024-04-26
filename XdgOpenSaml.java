@@ -41,7 +41,10 @@ import picocli.CommandLine.Command;
 import picocli.CommandLine.Option;
 import picocli.CommandLine.Parameters;
 
-@Command(name = "XdgSaml", mixinStandardHelpOptions = true, version = "0.1", description = "retrieve saml token with xdg open")
+/**
+ * @author filippor(filippo.rossoni@gmail.com)
+ */
+@Command(name = "XdgOpenSaml", mixinStandardHelpOptions = true, version = "0.1", description = "retrieve saml token with xdg open")
 class XdgOpenSaml implements Callable<Integer> {
 
 	@Parameters(index = "0", description = "The server to call")
@@ -179,4 +182,7 @@ class XdgOpenSaml implements Callable<Integer> {
 			}
 		};
 	}
+	
+	
+	
 }
