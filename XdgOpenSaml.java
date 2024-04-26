@@ -93,20 +93,7 @@ class XdgOpenSaml implements Callable<Integer> {
 
 			return cookieResult.get(5, TimeUnit.MINUTES);
 		} finally {
-			server.stop(0);
-		}
-
-	}
-
-	private void sendResponse(HttpExchange exchange, int code, String message) {
-		try {
-			exchange.sendResponseHeaders(code, message.length());
-			try (OutputStream stream = exchange.getResponseBody()) {
-				stream.write(message.getBytes());
-			}
-		} catch (IOException e) {
-			//error in sending response to browser try to not fail token retrieve
-			e.printStackTrace();
+			server.stop(1);
 		}
 
 	}
@@ -123,13 +110,14 @@ class XdgOpenSaml implements Callable<Integer> {
 		@Override
 		public void handle(HttpExchange exchange) throws IOException {
 			try {
-				String requestQuery = exchange.getRequestURI().getQuery();
-				extractId(requestQuery).ifPresentOrElse(id -> {
-					cookieResult.complete(retrieveCookieFromId(url ,id));
+				extractId(exchange.getRequestURI().getQuery()).ifPresentOrElse(id -> {
+					String cookie = retrieveCookieFromId(id);
 					sendResponse(exchange, 200,
 							XdgOpenSaml.class.getSimpleName() + " Retrieved Cookie! Connecting ...");
+					cookieResult.complete(cookie);
 				}, () -> {
-					String errorMessage = "ERROR: Redirect does not contain \"" + ID_PARAMETER_NAME + "\" parameter " + requestQuery ;
+					String errorMessage = "ERROR: Redirect does not contain \"" + ID_PARAMETER_NAME + "\" parameter "
+							+ exchange.getRequestURI();
 					sendResponse(exchange, 500, errorMessage);
 					cookieResult.completeExceptionally(new CannotRetrieveException(errorMessage));
 				});
@@ -140,20 +128,32 @@ class XdgOpenSaml implements Callable<Integer> {
 		}
 
 		private Optional<String> extractId(String requestQuery) {
-			Optional<String> idOpt = Arrays.stream(requestQuery.split("&")).filter(s -> s.startsWith(ID_PARAMETER_NAME))
-					.findAny().map(s -> s.substring(s.indexOf('=')));
-			return idOpt;
+			return Arrays.stream(requestQuery.split("&")).filter(s -> s.startsWith(ID_PARAMETER_NAME)).findAny()
+					.map(s -> s.substring(s.indexOf('=')));
 		}
 
-		private String retrieveCookieFromId(String url,String id) {
+		private void sendResponse(HttpExchange exchange, int code, String message) {
 			try {
-				HttpRequest httpRequest = HttpRequest.newBuilder().uri(new URI(url+ "/remote/saml/auth_id?id=" + id)).GET().build();
-				SSLContext sslContext;
+				exchange.sendResponseHeaders(code, message.length());
+				try (OutputStream stream = exchange.getResponseBody()) {
+					stream.write(message.getBytes());
+				}
+			} catch (IOException e) {
+				// error in sending response to browser try to not fail token retrieve
+				e.printStackTrace();
+			}
+
+		}
+
+		private String retrieveCookieFromId(String id) {
+			try {
+				HttpRequest httpRequest = HttpRequest.newBuilder().uri(new URI(url + "/remote/saml/auth_id?id=" + id))
+						.GET().build();
+				SSLContext sslContext = SSLContext.getDefault();
+
 				if (trustAllCertificate) {
 					sslContext = SSLContext.getInstance("TLS");
 					sslContext.init(null, new TrustManager[] { noTrustManager }, new SecureRandom());
-				} else {
-					sslContext = SSLContext.getDefault();
 				}
 
 				HttpClient client = HttpClient.newBuilder().sslContext(sslContext).build();
@@ -171,10 +171,9 @@ class XdgOpenSaml implements Callable<Integer> {
 		}
 
 		private String extractCookie(HttpResponse<Stream<String>> response) throws XdgOpenSaml.CannotRetrieveException {
-			String svpnCoockie = response.headers().allValues("set-cookie").stream()
-					.filter(s -> s.startsWith(COOKIE_NAME)).findAny().map(s -> s.split(";")[0])
+			return response.headers().allValues("set-cookie").stream().filter(s -> s.startsWith(COOKIE_NAME)).findAny()
+					.map(s -> s.split(";")[0])
 					.orElseThrow(() -> new CannotRetrieveException("Missing " + COOKIE_NAME + " in response"));
-			return svpnCoockie;
 		}
 
 	}
