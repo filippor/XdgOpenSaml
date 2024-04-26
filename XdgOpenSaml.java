@@ -8,13 +8,10 @@ import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.net.URI;
-import java.net.URISyntaxException;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.net.http.HttpResponse.BodyHandlers;
-import java.security.KeyManagementException;
-import java.security.NoSuchAlgorithmException;
 import java.security.SecureRandom;
 import java.security.cert.CertificateException;
 import java.security.cert.X509Certificate;
@@ -34,6 +31,7 @@ import javax.net.ssl.TrustManager;
 import javax.net.ssl.X509ExtendedTrustManager;
 
 import com.sun.net.httpserver.HttpExchange;
+import com.sun.net.httpserver.HttpHandler;
 import com.sun.net.httpserver.HttpServer;
 
 import picocli.CommandLine;
@@ -44,7 +42,7 @@ import picocli.CommandLine.Parameters;
 /**
  * @author filippor(filippo.rossoni@gmail.com)
  */
-@Command(name = "XdgOpenSaml", mixinStandardHelpOptions = true, version = "0.1", description = "retrieve saml token with xdg open")
+@Command(name = "XdgOpenSaml", mixinStandardHelpOptions = true, version = "0.2", description = "retrieve saml token with xdg open")
 class XdgOpenSaml implements Callable<Integer> {
 
 	@Parameters(index = "0", description = "The server to call")
@@ -73,79 +71,123 @@ class XdgOpenSaml implements Callable<Integer> {
 	public Integer call() throws Exception { // your business logic goes here...
 		String serverUrl = "https://" + server;
 
-		String id = retrieveId(serverUrl + "/remote/saml/start?redirect=1" + realm.map(r -> "&realm=" + r).orElse(""));
-		String cookie = retrieveCookie(serverUrl + "/remote/saml/auth_id?id=" + id);
+		String cookie = retrieveCookie(serverUrl);
 
 		System.out.println(cookie);
 
 		return 0;
 	}
 
-	private String retrieveId(String url) throws XdgOpenSaml.CannotRetrieveException, InterruptedException, IOException,
-			ExecutionException, TimeoutException {
+	private String retrieveCookie(String url) throws XdgOpenSaml.CannotRetrieveException, InterruptedException,
+			IOException, ExecutionException, TimeoutException {
 		InetAddress localAddress = InetAddress.getByName("127.0.0.1");
 		HttpServer server = HttpServer.create(new InetSocketAddress(localAddress, port), 0);
-		CompletableFuture<Optional<String>> idResult = new CompletableFuture<>();
-		String errorMessage = "ERROR: Redirect does not contain \"" + ID_PARAMETER_NAME + "\" parameter";
+
+		CompletableFuture<String> cookieResult = new CompletableFuture<>();
 		try {
-			server.createContext("/", exchange -> {
-				String requestQuery = exchange.getRequestURI().getQuery();
-				Optional<String> id = Arrays.stream(requestQuery.split("&")).filter(s -> s.startsWith(ID_PARAMETER_NAME)).findAny()
-						.map(s -> s.substring(s.indexOf('=')));
-				if (id.isPresent()) {
-					sendResponse(exchange, 200, XdgOpenSaml.class.getSimpleName() + " Retrieved Id! Start retrieving token ...");
-				}else {
-					sendResponse(exchange, 500, errorMessage);
-				}
-				idResult.complete(id);
-			});
+			server.createContext("/", new CookieRetrieverHttpHandler(cookieResult, url));
 			server.start();
-			Runtime.getRuntime().exec(new String[] { "xdg-open", url });
-			return idResult.get(5, TimeUnit.MINUTES).orElseThrow(() -> new CannotRetrieveException(errorMessage));
+
+			Runtime.getRuntime().exec(new String[] { "xdg-open",
+					url + "/remote/saml/start?redirect=1" + realm.map(r -> "&realm=" + r).orElse("") });
+
+			return cookieResult.get(5, TimeUnit.MINUTES);
 		} finally {
 			server.stop(0);
 		}
 
 	}
 
-	private void sendResponse(HttpExchange exchange, int code, String message) throws IOException {
-		exchange.sendResponseHeaders(code, message.length());
-		try (OutputStream stream = exchange.getResponseBody()) {
-			stream.write(message.getBytes());
+	private void sendResponse(HttpExchange exchange, int code, String message) {
+		try {
+			exchange.sendResponseHeaders(code, message.length());
+			try (OutputStream stream = exchange.getResponseBody()) {
+				stream.write(message.getBytes());
+			}
+		} catch (IOException e) {
+			//error in sending response to browser try to not fail token retrieve
+			e.printStackTrace();
 		}
+
 	}
 
-	private String retrieveCookie(String url) throws URISyntaxException, NoSuchAlgorithmException,
-			KeyManagementException, IOException, InterruptedException, XdgOpenSaml.CannotRetrieveException {
-		HttpRequest httpRequest = HttpRequest.newBuilder().uri(new URI(url)).GET().build();
+	private final class CookieRetrieverHttpHandler implements HttpHandler {
+		private final CompletableFuture<String> cookieResult;
+		private final String url;
 
-		SSLContext sslContext;
-		if (trustAllCertificate) {
-			sslContext = SSLContext.getInstance("TLS");
-			sslContext.init(null, new TrustManager[] { noTrustManager }, new SecureRandom());
-		} else {
-			sslContext = SSLContext.getDefault();
+		private CookieRetrieverHttpHandler(CompletableFuture<String> cookieResult, String url) {
+			this.cookieResult = cookieResult;
+			this.url = url;
 		}
 
-		HttpClient client = HttpClient.newBuilder().sslContext(sslContext).build();
+		@Override
+		public void handle(HttpExchange exchange) throws IOException {
+			try {
+				String requestQuery = exchange.getRequestURI().getQuery();
+				extractId(requestQuery).ifPresentOrElse(id -> {
+					cookieResult.complete(retrieveCookieFromId(url ,id));
+					sendResponse(exchange, 200,
+							XdgOpenSaml.class.getSimpleName() + " Retrieved Cookie! Connecting ...");
+				}, () -> {
+					String errorMessage = "ERROR: Redirect does not contain \"" + ID_PARAMETER_NAME + "\" parameter " + requestQuery ;
+					sendResponse(exchange, 500, errorMessage);
+					cookieResult.completeExceptionally(new CannotRetrieveException(errorMessage));
+				});
+			} catch (Exception e) {
+				sendResponse(exchange, 500, e.getMessage());
+				cookieResult.completeExceptionally(e);
+			}
+		}
 
-		HttpResponse<Stream<String>> response = client.send(httpRequest, BodyHandlers.ofLines());
-		var code = response.statusCode();
+		private Optional<String> extractId(String requestQuery) {
+			Optional<String> idOpt = Arrays.stream(requestQuery.split("&")).filter(s -> s.startsWith(ID_PARAMETER_NAME))
+					.findAny().map(s -> s.substring(s.indexOf('=')));
+			return idOpt;
+		}
 
-		if (code < 400) {
+		private String retrieveCookieFromId(String url,String id) {
+			try {
+				HttpRequest httpRequest = HttpRequest.newBuilder().uri(new URI(url+ "/remote/saml/auth_id?id=" + id)).GET().build();
+				SSLContext sslContext;
+				if (trustAllCertificate) {
+					sslContext = SSLContext.getInstance("TLS");
+					sslContext.init(null, new TrustManager[] { noTrustManager }, new SecureRandom());
+				} else {
+					sslContext = SSLContext.getDefault();
+				}
+
+				HttpClient client = HttpClient.newBuilder().sslContext(sslContext).build();
+
+				HttpResponse<Stream<String>> response = client.send(httpRequest, BodyHandlers.ofLines());
+				if (response.statusCode() < 400) {
+					return extractCookie(response);
+				} else {
+					throw new CannotRetrieveException("Error retrieving Cookie [" + response.statusCode() + "]\"\n"
+							+ response.body().collect(Collectors.joining("\n")));
+				}
+			} catch (Exception e) {
+				throw sneakyThrow(e);
+			}
+		}
+
+		private String extractCookie(HttpResponse<Stream<String>> response) throws XdgOpenSaml.CannotRetrieveException {
 			String svpnCoockie = response.headers().allValues("set-cookie").stream()
 					.filter(s -> s.startsWith(COOKIE_NAME)).findAny().map(s -> s.split(";")[0])
 					.orElseThrow(() -> new CannotRetrieveException("Missing " + COOKIE_NAME + " in response"));
 			return svpnCoockie;
-		} else {
-			throw new CannotRetrieveException("Error retrieving Cookie [" + code + "]\"\n" + response.body().collect(Collectors.joining("\n")));
 		}
+
 	}
 
 	private final static class CannotRetrieveException extends Exception {
 		public CannotRetrieveException(String message) {
 			super(message);
 		}
+	}
+
+	@SuppressWarnings("unchecked")
+	public static <E extends Throwable> E sneakyThrow(Throwable e) throws E {
+		throw (E) e;
 	}
 
 	private static X509ExtendedTrustManager createNoTrustManager() {
@@ -182,7 +224,5 @@ class XdgOpenSaml implements Callable<Integer> {
 			}
 		};
 	}
-	
-	
-	
+
 }

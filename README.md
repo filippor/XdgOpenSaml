@@ -21,7 +21,7 @@ a native executable XdgOpenSaml for linux x86-64 is committed
 ## options
 
 ```
-Usage: XdgOpenSamlgit [-htV] [-p=<port>] [-r=<realm>] <server>
+Usage: XdgOpenSaml [-htV] [-p=<port>] [-r=<realm>] <server>
 retrieve saml token with xdg open
       <server>          The server to call
   -h, --help            Show this help message and exit.
