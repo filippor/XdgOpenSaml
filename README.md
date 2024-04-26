@@ -1,5 +1,5 @@
 # XdgOpenSaml
-retrieve saml token using external browser
+retrieve saml token using external browser and write it to standar out
 
 use xdg-open to open a browser
 
