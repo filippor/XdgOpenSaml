@@ -32,7 +32,6 @@ static void print_url(char *gateway_host, uint16_t gateway_port, char *realm) {
 		strncat(url, "&realm=", sizeof(url) - 1);
 		strncat(url, realm, sizeof(url) - 1);
 	}
-	printf("Authenticate at %s\n", url);
 	char command[600];
 	sprintf(command,"xdg-open %s",url);
 	system(command);
@@ -149,6 +148,6 @@ int main(int argc, char *argv[]) {
 	char *realm = argc>3?argv[4]:"";
 
 	char *id = listen_for_id(8020, gateway_host, gateway_port, realm);
-	printf("remote/saml/auth_id?id=%s",id);
+	printf("remote/saml/auth_id?id=%s\n",id);
 }
 
