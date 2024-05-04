@@ -160,7 +160,8 @@ class XdgOpenSaml implements Callable<Integer> {
 
 				HttpResponse<Stream<String>> response = client.send(httpRequest, BodyHandlers.ofLines());
 				if (response.statusCode() < 400) {
-					return extractCookie(response);
+					return extractCookie(response).orElseThrow(() -> new CannotRetrieveException(
+							"Missing " + COOKIE_NAME + " in response " + response.toString()));
 				} else {
 					throw new CannotRetrieveException("Error retrieving Cookie [" + response.statusCode() + "]\"\n"
 							+ response.body().collect(Collectors.joining("\n")));
@@ -170,10 +171,9 @@ class XdgOpenSaml implements Callable<Integer> {
 			}
 		}
 
-		private String extractCookie(HttpResponse<Stream<String>> response) throws XdgOpenSaml.CannotRetrieveException {
+		private Optional<String> extractCookie(HttpResponse<Stream<String>> response) {
 			return response.headers().allValues("set-cookie").stream().filter(s -> s.startsWith(COOKIE_NAME)).findAny()
-					.map(s -> s.split(";")[0])
-					.orElseThrow(() -> new CannotRetrieveException("Missing " + COOKIE_NAME + " in response"));
+					.map(s -> s.split(";")[0]);
 		}
 
 	}
